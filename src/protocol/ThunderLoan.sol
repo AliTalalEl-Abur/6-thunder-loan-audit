@@ -93,13 +93,15 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
-    mapping(IERC20 => AssetToken) public s_tokenToAssetToken;
-
+    mapping(IERC20 => AssetToken) public s_tokenToAssetToken; // e I think this maps the undelying token to it´s assetToken
+    // e USDC -> USDCAssetToken
     // The fee in WEI, it should have 18 decimals. Each flash loan takes a flat fee of the token price.
-    uint256 private s_feePrecision;
+    // audit-info this should be constant or inmutable
+    uint256 private s_feePrecision; // q why is the storage variable
     uint256 private s_flashLoanFee; // 0.3% ETH fee
 
     mapping(IERC20 token => bool currentlyFlashLoaning) private s_currentlyFlashLoaning;
+    // e probably a mapping that tells us if a token is in the middle of a flash loan
 
     /*//////////////////////////////////////////////////////////////
                                  EVENTS
@@ -149,25 +151,35 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     function initialize(address tswapAddress) external initializer {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
-        __Oracle_init(tswapAddress);
+        __Oracle_init(tswapAddress); // e using tswap as some kind of Oracle perhaps?
         s_feePrecision = 1e18; //written in aderyn
         s_flashLoanFee = 3e15; // 0.3% ETH fee
     }
 
+    // @audit-info where is the natspec
     function deposit(IERC20 token, uint256 amount) external revertIfZero(amount) revertIfNotAllowedToken(token) {
         AssetToken assetToken = s_tokenToAssetToken[token];
         uint256 exchangeRate = assetToken.getExchangeRate();
+        // e 100e18 USDC * 1e18 / 1e18 (2e18)
+        // 100e18 * 1e18 / 2e18 = 50e18
+        // e this should never be 0 because of the asset token conditional
+
         uint256 mintAmount = (amount * assetToken.EXCHANGE_RATE_PRECISION()) / exchangeRate;
         emit Deposit(msg.sender, token, amount);
         assetToken.mint(msg.sender, mintAmount);
+        // @audit follow up, this seems sus
+        // q why are we calculating the fees of flash loans in the deposit???
         uint256 calculatedFee = getCalculatedFee(token, amount);
+        // q why are we updating the exchanges rate
         assetToken.updateExchangeRate(calculatedFee);
+        // e when a liquidity provider deposits, the $ sits in the assetToken contract
         token.safeTransferFrom(msg.sender, address(assetToken), amount);
     }
 
     /// @notice Withdraws the underlying token from the asset token
     /// @param token The token they want to withdraw from
     /// @param amountOfAssetToken The amount of the underlying they want to withdraw
+    // e I have 10 assetToken for USDC, let me get my USDC based on the 10 asset token Exchange rate
     function redeem(
         IERC20 token,
         uint256 amountOfAssetToken
@@ -181,17 +193,19 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         if (amountOfAssetToken == type(uint256).max) {
             amountOfAssetToken = assetToken.balanceOf(msg.sender);
         }
+        // 1e18 * 1e18 = 1e18
+        // 1e18 * 2e18 = 2e18
         uint256 amountUnderlying = (amountOfAssetToken * exchangeRate) / assetToken.EXCHANGE_RATE_PRECISION();
         emit Redeemed(msg.sender, token, amountOfAssetToken, amountUnderlying);
         assetToken.burn(msg.sender, amountOfAssetToken);
         assetToken.transferUnderlyingTo(msg.sender, amountUnderlying);
     }
-
+    // e not natspec!!
     function flashloan(
-        address receiverAddress,
-        IERC20 token,
-        uint256 amount,
-        bytes calldata params
+        address receiverAddress, // e the address to get the flash loaned tokens
+        IERC20 token, // e the ERC20 to borrow
+        uint256 amount, // e the amount to borrow
+        bytes calldata params // e the parameters to call the receiveAddress with
     )
         external
         revertIfZero(amount)
@@ -203,11 +217,11 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         if (amount > startingBalance) {
             revert ThunderLoan__NotEnoughTokenBalance(startingBalance, amount);
         }
-
+        // e making sure the receiverAddress is a Smart contract
         if (receiverAddress.code.length == 0) {
             revert ThunderLoan__CallerIsNotContract();
         }
-
+        // e this is probably the fee of the flash loan!!
         uint256 fee = getCalculatedFee(token, amount);
         // audit-info - messed up the slither disables
         // slither-disable-next-line reentrancy-vulnerabilities-2 reentrancy-vulnerabilities-3
@@ -239,7 +253,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         }
         s_currentlyFlashLoaning[token] = false;
     }
-
+    // e this is what the contract expects users to repay using
     function repay(IERC20 token, uint256 amount) public {
         if (!s_currentlyFlashLoaning[token]) {
             revert ThunderLoan__NotCurrentlyFlashLoaning();
@@ -247,28 +261,35 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         AssetToken assetToken = s_tokenToAssetToken[token];
         token.safeTransferFrom(msg.sender, address(assetToken), amount);
     }
-
+// ok @audit-info needs natspec
     function setAllowedToken(IERC20 token, bool allowed) external onlyOwner returns (AssetToken) {
         if (allowed) {
-            if (address(s_tokenToAssetToken[token]) != address(0)) {
-                revert ThunderLoan__AlreadyAllowed();
+            if (address(s_tokenToAssetToken[token]) != address(0)) {// e represents the share sof the pool
+                revert ThunderLoan__AlreadyAllowed(); // @audit-info revert with token
             }
+            // what if they don´t have a name
             string memory name = string.concat("ThunderLoan ", IERC20Metadata(address(token)).name());
+            // ThunderLoan
             string memory symbol = string.concat("tl", IERC20Metadata(address(token)).symbol());
+            // tlUSDC
             AssetToken assetToken = new AssetToken(address(this), token, name, symbol);
             s_tokenToAssetToken[token] = assetToken;
             emit AllowedTokenSet(token, assetToken, allowed);
             return assetToken;
         } else {
             AssetToken assetToken = s_tokenToAssetToken[token];
-            delete s_tokenToAssetToken[token];
+            delete s_tokenToAssetToken[token]; // q does deleting mapping work right?
             emit AllowedTokenSet(token, assetToken, allowed);
             return assetToken;
         }
     }
-
+    // e where is the natspec
+    // Is this calculating the fees of the flash loans
+    // @param amount the amount being borrowed
+    // @param token the token being borrowed
     function getCalculatedFee(IERC20 token, uint256 amount) public view returns (uint256 fee) {
         //slither-disable-next-line divide-before-multiply
+        // e so why this is need tswap
         uint256 valueOfBorrowedToken = (amount * getPriceInWeth(address(token))) / s_feePrecision;
         //slither-disable-next-line divide-before-multiply
         fee = (valueOfBorrowedToken * s_flashLoanFee) / s_feePrecision;
@@ -281,7 +302,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         // @audit-low must emit an event
         s_flashLoanFee = newFee;
     }
-
+    // q is it ever unset poorly?
     function isAllowedToken(IERC20 token) public view returns (bool) {
         return address(s_tokenToAssetToken[token]) != address(0);
     }
