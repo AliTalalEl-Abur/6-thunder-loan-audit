@@ -97,7 +97,8 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     // e USDC -> USDCAssetToken
     // The fee in WEI, it should have 18 decimals. Each flash loan takes a flat fee of the token price.
     // audit-info this should be constant or inmutable
-    uint256 private s_feePrecision; // q why is the storage variable
+    uint256 private s_feePrecision; // q why is the storage variable 
+    // @audit-info this should be constant/immutable
     uint256 private s_flashLoanFee; // 0.3% ETH fee
 
     mapping(IERC20 token => bool currentlyFlashLoaning) private s_currentlyFlashLoaning;
@@ -169,6 +170,8 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         assetToken.mint(msg.sender, mintAmount);
         // @audit follow up, this seems sus
         // q why are we calculating the fees of flash loans in the deposit???
+        // @audit-high we´ve got em!!!
+        // We shouldn´t be updating the Exchange rate here!
         uint256 calculatedFee = getCalculatedFee(token, amount);
         // q why are we updating the exchanges rate
         assetToken.updateExchangeRate(calculatedFee);
@@ -254,6 +257,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         s_currentlyFlashLoaning[token] = false;
     }
     // e this is what the contract expects users to repay using
+    // token < token + fee (token)
     function repay(IERC20 token, uint256 amount) public {
         if (!s_currentlyFlashLoaning[token]) {
             revert ThunderLoan__NotCurrentlyFlashLoaning();
@@ -290,6 +294,11 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     function getCalculatedFee(IERC20 token, uint256 amount) public view returns (uint256 fee) {
         //slither-disable-next-line divide-before-multiply
         // e so why this is need tswap
+        // 1 USDC == 0.1 WETH
+        // 1 USDC + 0.003 WETH
+        // 1 USDC + 0.003 USDC?????
+        // @audit-high if the fee is going to be in the token, then the value should reflect that
+
         uint256 valueOfBorrowedToken = (amount * getPriceInWeth(address(token))) / s_feePrecision;
         //slither-disable-next-line divide-before-multiply
         fee = (valueOfBorrowedToken * s_flashLoanFee) / s_feePrecision;
