@@ -94,3 +94,70 @@ I have created a proof of code located in my `audit-data` folder. It is too larg
 
 **Recommended Mitigation:** Consider using a different price oracle mechanism, like a Chainlink price feed with a Uniswap TWAP fallback oracle.
 
+
+### [H-#] Mixing up variable location casuses storage collisions in `ThunderLoan::s_flashLoanFee` and `ThunderLoan::s_currentlyFlashLoaning`, freezing protocol
+
+**Description:** `ThunderLoan.sol` has two variables in the following order:
+
+```javascript
+    uint256 private s_feePrecision;
+    uint256 private s_flashLoanFee; // 0.3% ETH fee
+```
+
+However, the upgraded contract `ThunderLoanUpgraded.sol` has them in a different order:
+
+```javascript
+    uint256 private s_flashLoanFee; // 0.3% ETH fee
+    uint256 public constant FEE_PRECISION = 1e18;
+```
+
+Due to how Solidity storage works, after the upgrade the `s_flashLoanFee` will have the value of `s_feePrecision`. You cannot adjust the position of storage variables, and removing storage variables for constant variables, breaks the storage locations as well.
+
+**Impact:** After the upgrade, the `s_flashLoanFee` will have the value of `s_feePrecision`. This means that users who take out flash loans right after an upgrade will be charged the wrong fee.
+
+More importantly, the `s_currentlyFlashLoaning` mapping with storage in the wrong storage slot.
+
+**Proof of Concept:**
+
+<details>
+<summary>PoC</summary>
+
+Place the following into `ThunderLoanTest.t.sol`
+
+```javascript
+import {ThunderLoanUpgraded} from "../../src/protocol/ThunderLoanUpgraded.sol";
+.
+.
+.
+function testUpgradeBreaks() public {
+    uint256 feeBeforeUpgrade = thunderLoan.getFee();
+    vm.startPrank(thunderLoan.owner());
+    ThunderLoanUpgraded upgraded = new ThunderLoanUpgraded();
+    thunderLoan.upgradeToAndCall(address(upgraded), "");
+    uint256 feeAfterUpgrade = thunderLoan.getFee();
+    vm.stopPrank();
+
+    console2.log("Fee Before: ", feeBeforeUpgrade);
+    console2.log("Fee After: ", feeAfterUpgrade);
+
+    assert(feeBeforeUpgrade != feeAfterUpgrade);
+}
+```
+You can also see the storage layout difference by running `forge inspect ThunderLoan storage` and `forge inspect ThunderLoanUpgraded storage`
+
+</details>
+
+**Recommended Mitigation:** If you must remove the storage variable, leave it as blank as to not mess up the storage slots.
+
+```diff
+-   uint256 private s_flashLoanFee; // 0.3% ETH fee
+-   uint256 public constant FEE_PRECISION = 1e18;
++   uint256 private s_blank;
++   uint256 private s_flashLoanFee; // 0.3% ETH fee
++   uint256 public constant FEE_PRECISION = 1e18;
+```
+
+<FollowUp>
+¿Te gustaría que revisemos otras alternativas de diseño para contratos actualizables, como el uso de **patrones de almacenamiento estructurado (Proxiable/Diamond Storage)** o el uso de **`__gap`** si utilizas las librerías de OpenZeppelin?
+</FollowUp>
+

